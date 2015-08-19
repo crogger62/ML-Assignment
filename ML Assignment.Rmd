@@ -1,0 +1,143 @@
+## Use of Machine Learning to Predict Exercise Patterns
+### Craig Lewis
+### Coursera/JHU - Machine Learning 
+
+========================================================
+
+
+## Introduction
+A data set selected from website http://groupware.les.inf.puc-rio.br/har is used to train several different machine learning models in an attempt to determine how well people conducted a barbell exercise. Data was collected for over 19,000 exercises and the quality of the exercise is evaluated as a series of classes: Exactly according to specification (Class A),  throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+
+At the website author's request, a citation in the *Reference* section below. 
+
+Two machine learning algorithms are used to learn a training dataset and the predict the class based on a series of measurements in a test set. 
+
+## Exploratory Analysis
+
+There are two datasets provided as part of this assignment: a training data set with 19,622 observations of 54 variables (including the class) and a test data set with 20 observations of 54 variables (class not specified by a reference to the problem ID used for submission is provided). 
+
+Data is read into 'R' using standard libraries. A random seed is is set so that findings can be repeated
+. 
+
+```{r, warning=FALSE}
+# Load libraries
+library(caret)
+
+# Help with processing time
+library(doParallel)
+registerDoParallel(cores=4)
+
+# Load data
+pml_train<-read.csv("pml-training.csv", na.strings=c("NA",""),stringsAsFactors=FALSE)
+pml_test<-read.csv("pml-testing.csv", na.strings=c("NA",""), stringsAsFactors=FALSE)
+
+# Set seed
+set.seed(80218)
+```
+
+An examination of the input data shows that the first four columns include time stamps and user information that has no bearing on the end results so these are removed. Also, several columns are effectively zero so these are removed. NA values are replaced with the value 0. 
+
+There are two sets of input data: training and testing. The testing data set will be set aside and used at the end of the process as a submission to the assignment. The training set is also split into a train (75%) and test (25%) data set to validate the models developed in this paper.  
+
+```{r, warning=FALSE}
+# remove first six columns
+pml_test<-pml_test[,7:160]
+pml_train<-pml_train[,7:160]
+
+# Eliminate columns with no useful values, convert to numeric columns
+goodCol<-colSums(is.na(pml_test)) == 0
+pml_train<-pml_train[goodCol]
+pml_test<-pml_test[goodCol]
+pml_train$classe<-as.factor(pml_train$classe)
+
+# For validation run
+inTrain<-createDataPartition(pml_train$classe, p=0.75,list=FALSE)
+training<-pml_train[inTrain,]
+testing<-pml_train[-inTrain,]
+
+train_classe<-as.factor(pml_train$classe)   ## need this later to train
+```
+
+## Decision Tree Model ##
+The first model to consider is a decision tree. The basic tree is constructed and labeled. We also use the validation data set to evaluate the accuracy of the model. 
+
+```{r, warning=FALSE}
+rpModel<-train(training$classe ~ ., method="rpart",data=training[,-54])
+
+plot(rpModel$finalModel,uniform=TRUE,main="Classification Tree")
+text(rpModel$finalModel,use.n=TRUE,all=TRUE,cex=.8)
+ 
+rpModelFinal<-predict(rpModel,testing)
+rpcm<-confusionMatrix(testing$classe,rpModelFinal)
+rpcm$table
+accuracy<-round(postResample(testing$classe, rpModelFinal)[[1]]*100,1)
+
+```
+There are two notable pieces of information in these results. Looking at the Classification Tree we note that only variables A, B, C and E are present; D is not represented in the output. This is also noticeable by examining the confusion matrix. Accuracy is calculated at only `r accuracy`% for this instance which yields an out of sample error rate of `r 100-accuracy`%. 
+
+
+
+## PCA Analysis ##
+
+During the preprocessing steps, we eliminated columns that weren't relevant to the learning (timestamps, users) and we elminated columns that were effecitvely empty. This left 53 variables for machine learning. Using Principal Components Analysis (PCA), we can create weighted combination of predictors capture the highest value of information. 
+
+By conducting PCA analysis we can reduct the number of variables from 53 to 26 and still capture 95% of the variance in the data. We will apply the PCA output to all the data sets before continuing. 
+
+
+```{r, warning=FALSE}
+
+pcaCol<-preProcess(pml_train[,-54],method="pca")
+pml_trainPCA<-predict(pcaCol,pml_train[,-54])
+trainPCA<-predict(pcaCol,training[,-54])
+testPCA<-predict(pcaCol,testing[,-54])
+#for later
+pml_testPCA<-predict(pcaCol,pml_test[,-54])
+
+```
+
+
+## Random Forest ##
+
+Now a Random Forest model is used to try and obtain a better result. We will use the PCA data sets in this pass.  After running the model, a graph of the variables resulting fromt the Principal Componetns is displayed. Roughly 1/3 of the variables contribute over 30%. 
+
+```{r, warning=FALSE}
+
+library(randomForest)
+
+rfModel<-randomForest(training$classe ~ ., data=trainPCA,ntree=100,importance=TRUE)
+varImpPlot(rfModel, main="Principal Components",type=1,pch=19)
+model<-predict(rfModel, testPCA)
+cm<-confusionMatrix(testing$classe, model)
+cm$table
+
+accuracy<-round(postResample(testing$classe, model)[[1]]*100,2)
+
+```
+Examining the confusion matrix from this run we see much better classification using this model and infact the accuracy is now `r accuracy`% which yields an out of sample error rate of `r 100-accuracy`%. This is significantly better than the classificaion trees used in the first pass. 
+
+## Findings
+We can now apply the Random Forest model to the full training data set and evaluate this model with the test set provided. 
+
+```{r}
+# Full data set
+rfModelFinal<-randomForest( train_classe ~ ., data=pml_trainPCA, ntree=100,importance=TRUE)
+rfModel_N<-train(training$classe ~ ., data=trainPCA, method="rf", ntree=100, importance=TRUE)
+
+modelFinal<-predict(rfModelFinal, pml_testPCA)   #answers to submit
+
+
+
+```
+
+Using the Random Forest model the assignment findings are `r modelFinal` which, when submitted, yield 100% accurate results. Woot. 
+
+
+### Reference
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+
+
+
+
+
+
